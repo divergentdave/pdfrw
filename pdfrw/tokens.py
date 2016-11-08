@@ -63,6 +63,8 @@ class PdfTokens(object):
                          re.DOTALL).finditer
     findparen = re.compile('(%s)[%s]*' % (p_literal_string_extend,
                                           whitespace), re.DOTALL).finditer
+    searchei = re.compile('[%s]?(EI)[%s]*' % (whitespace, whitespace),
+                          re.DOTALL).search
 
     def _cacheobj(cache, obj, constructor):
         ''' This caching relies on the constructors
@@ -79,7 +81,8 @@ class PdfTokens(object):
     def _gettoks(self, startloc, cacheobj=_cacheobj,
                  delimiters=delimiters, findtok=findtok,
                  findparen=findparen, PdfString=PdfString,
-                 PdfObject=PdfObject, BasePdfName=BasePdfName):
+                 PdfObject=PdfObject, BasePdfName=BasePdfName,
+                 searchei=searchei):
         ''' Given a source data string and a location inside it,
             gettoks generates tokens.  Each token is a tuple of the form:
              <starting file loc>, <ending file loc>, <token string>
@@ -101,6 +104,13 @@ class PdfTokens(object):
                 token = match.group(1)
                 firstch = token[0]
                 if firstch not in delimiters:
+                    if token == "ID":
+                        # There is only one whitespace character between
+                        # ID and binary data for an inline image
+                        if current[0][1] > current[0][0] + 3:
+                            current[0] = (current[0][0], current[0][0] + 3)
+                        elif current[0][1] < current[0][0] + 3:
+                            self.error('Missing whitespace after ID')
                     token = cacheobj(cache, token, PdfObject)
                 elif firstch in '/<(%':
                     if firstch == '/':
@@ -155,7 +165,15 @@ class PdfTokens(object):
                                         'should never get here'))
 
                 yield token
-                if current[0] is not tokspan:
+                if token == "ID":
+                    # Inline image, yield inline binary data, delimited by
+                    # ID and EI
+                    ei_match = searchei(fdata, current[0][1])
+                    data_span = (current[0][1], ei_match.start())
+                    current[0] = (current[0][1], ei_match.start(1))
+                    yield fdata[data_span[0]:data_span[1]]
+                    break
+                elif current[0] is not tokspan:
                     break
             else:
                 if self.strip_comments:
